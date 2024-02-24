@@ -76,7 +76,12 @@ class Model:
 
         # solver parameters
         self.df = 1 # Dampening factor to prevent excessive oscillation of temperatures
-
+    
+    
+    def check_inputs(self):
+        """ Checks the feed values and feed composition to avoid errors"""
+        
+        
     def add_parameters(self, verbose=False):
         """Add thermodynamic parameters for calculation
 

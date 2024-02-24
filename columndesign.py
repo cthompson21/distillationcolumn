@@ -10,14 +10,14 @@ import numpy as np
 from matplotlib.pyplot import *
 import distillation.amundson_1958.main as am
 
+import seaborn as sns
 
 
 
 
 
 
-
-def solve_for_model(num, _plot=True):
+def solve_for_model(num,R,  _plot=True):
     print('------------',num)
     global x, y
     model=None
@@ -47,6 +47,18 @@ def solve_for_model(num, _plot=True):
     z[0][feedstage2] = 0.25
     
     print(z)
+    
+    F =np.zeros((num,))
+    feedstage1 = int(num/2)
+    # feedstage2 = int(2*num/3)
+    F[feedstage1] = 1
+    # F[feedstage2] = 0.5
+    
+    z = [np.zeros((num,)),np.zeros((num,))]
+    z[1][feedstage1] = 0.5
+    # z[1][feedstage2] = 0.5
+    z[0][feedstage1] = 0.5
+    # z[0][feedstage2] = 0.25
 
     
     
@@ -56,7 +68,7 @@ def solve_for_model(num, _plot=True):
     F=F, # kmol/h
     P=2*1e5, # Pa
     z_feed = z,
-    RR=1.,
+    RR=R,
     D=0.4,
     
 
@@ -161,43 +173,51 @@ def solve_for_model(num, _plot=True):
     
     return model
 
-close('all')
+# close('all')
 # model=solve_for_model(16, _plot=True)  
 # suptitle('array')         
-df = pd.DataFrame( columns = ['Qcond', 'Qreboil', 'hfeed', 'EnergyBalance', 'MinEnergy', 'recovery', 'purity'])
+df = pd.DataFrame( columns = ['Qcond', 'Qreboil', 'hfeed',
+                              'EnergyBalance', 'MinEnergy', 'recovery',
+                              'purity', 'reflux_ratio', 'num_stages'])
 product = 'n-Butane'
-for num in np.arange(5,30,2):
+for reflux_ratio in np.arange(0.5,3.5,0.5):
+    for num_stages in np.arange(3,12,1):
+        
+        model=solve_for_model(num_stages,reflux_ratio, _plot=False)
+        # suptitle(str(num_stages)+' stages')
+        EnergyBalance = model.Q_reboiler_rule()+model.Q_condenser_rule()-model.h_feed_rule(model.feed_stage)
+        MinimumSeparationEnergy=0#-8.314*298*(sum((model.z_feed[component]*np.log(model.z_feed[component]) for component in model.components)))
+        
+        print("minimum energy (J/mol)", MinimumSeparationEnergy)
+        print('Energy input (J/mol)', EnergyBalance/1000)
+        
+        recovery = model.y[product][1]*model.D/np.sum(model.z_feed[product]*np.array(model.F_feed))
+        print('recovery is', recovery)
+        purity = model.y[product][1]
+        b=[model.Q_condenser_rule()/1000,
+                      model.Q_reboiler_rule()/1000,
+                            model.h_feed_rule(model.feed_stage)/1000 , 
+                            EnergyBalance,
+                            MinimumSeparationEnergy,
+                            recovery,
+                            purity,
+                            reflux_ratio,
+                            num_stages
+                           ]
+        
+        a = pd.DataFrame(columns=df.columns, data=[b],index = [df.shape[0]])
+        df = pd.concat((df, a),axis=0)
     
-    model=solve_for_model(num, _plot=True)
-    suptitle(str(num)+' stages')
-    EnergyBalance = model.Q_reboiler_rule()+model.Q_condenser_rule()-model.h_feed_rule(model.feed_stage)
-    MinimumSeparationEnergy=0#-8.314*298*(sum((model.z_feed[component]*np.log(model.z_feed[component]) for component in model.components)))
+    df.index = np.arange(df.shape[0])
+    fig, ((ax1,ax2), (ax3,ax4)) = subplots(2,2)
     
-    print("minimum energy (J/mol)", MinimumSeparationEnergy)
-    print('Energy input (J/mol)', EnergyBalance/1000)
-    
-    recovery = model.y[product][1]*model.D/np.sum(model.z_feed[product]*np.array(model.F_feed))
-    print('recovery is', recovery)
-    purity = model.y[product][1]
-    b=[model.Q_condenser_rule()/1000,
-                  model.Q_reboiler_rule()/1000,
-                        model.h_feed_rule(model.feed_stage)/1000 , 
-                        EnergyBalance,
-                        MinimumSeparationEnergy,
-                        recovery,
-                        purity,]
-    print(b)
-    a = pd.DataFrame(columns=df.columns, data=[b],index = [num],)
-    df = pd.concat((df, a),axis=0)
-fig, ((ax1,ax2), (ax3,ax4)) = subplots(2,2)
-
-df['EnergyBalance'].plot(ax=ax1)
-df['purity'].plot(ax=ax2)    
-df['Qcond'].plot(ax=ax3)    
-df['Qreboil'].plot(ax=ax4) 
-
-ax1.set_ylabel('energy balance')
-ax2.set_ylabel('purity')
-ax3.set_ylabel('Qcond')
-ax4.set_ylabel('Qreboil')
-ax2.set_ylim(0,1)
+    df.to_excel('C:/Users/chris/Desktop/DistillationModel1.xlsx')
+    sns.lineplot(data=df, x='num_stages', y='EnergyBalance', hue='reflux_ratio', ax=ax1)
+    sns.lineplot(data=df, x='num_stages', y='purity', hue='reflux_ratio', ax=ax2)
+    sns.lineplot(data=df, x='num_stages', y='Qcond', hue='reflux_ratio', ax=ax3)
+    sns.lineplot(data=df, x='num_stages', y='Qreboil', hue='reflux_ratio', ax=ax4)
+    ax1.set_ylabel('energy balance')
+    ax2.set_ylabel('purity')
+    ax3.set_ylabel('Qcond')
+    ax4.set_ylabel('Qreboil')
+    ax2.set_ylim(0,1)
