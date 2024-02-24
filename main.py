@@ -36,7 +36,7 @@ class Model:
         self.RR = RR
         self.D = D
         self.B = sum(self.F_feed) - D
-        self.N = len(F)-1
+        self.N = len(F)-1  ### the index of the last stage (the reboiler)
         
         self.T_feed_guess = T_feed_guess
         self.K_func = {}
@@ -67,15 +67,7 @@ class Model:
         for component in self.components:
             self.z[component][:] = self.z_feed[component]
             
-        
-            
-            
-        # print("We have set the feed hard set in the code!")
-        # self.z['n-Butane'][5]=0.75
-        # self.z['n-Butane'][11]=0.25
-        # self.z['n-Pentane'][5]=0.25
-        # self.z['n-Pentane'][11]=0.75
-        
+
 
         self.T_feed = self.T_feed_guess
         self.T = np.zeros(self.num_stages)
@@ -215,7 +207,7 @@ class Model:
         feed_stages = np.where(np.array(self.F_feed)>0)[0]
         
         return self.D * self.h_j_rule(0) + self.B * self.h_j_rule(self.N) \
-               - np.sum(np.array(self.F_feed) * np.array(list((self.h_feed_rule(s) for s in feed_stages)))) - self.Q_condenser_rule()
+               - np.sum(np.array(self.F_feed) * np.array(list(self.h_feed_rule(s) for s in range(self.num_stages)))) - self.Q_condenser_rule()
                
                
         # return self.D * self.h_j_rule(0) + self.B * self.h_j_rule(self.N) \
@@ -295,8 +287,8 @@ class Model:
 
         """
         if stage==None:
-            print('MUST GIVE STAGE INDICATION FOR T_FEED BUBBLE POINT')
-            raise 
+            print('USING THE HIGHEST FEED STAGE TO SET THE BUBBLE POINT FOR THE FEED.  THIS MAY CAUSE INCORRECT RESULTS')
+            stage = self.feed_stage
         return bubble_point(
             [self.z_feed[i][stage] for i in self.components],
             [self.K_func[i].eval_SI for i in self.components], self.P_feed, self.T_feed_guess
@@ -309,7 +301,7 @@ class Model:
         """
         # initialize L, V with CMO
         
-        # self.L[:self.feed_stage] = self.RR * self.D + np.cumsum(self.F_feed)  ### XXX Removing this 
+       
         self.L[:] = self.RR * self.D + np.cumsum(self.F_feed)
         
         self.L[self.N] = self.B
@@ -388,22 +380,7 @@ class Model:
             mat[p,p]=self.h_j_rule(p-1) - self.H_j_rule(p)  
         for p in range(1,self.N):
             mat[p, p+1]=self.H_j_rule(p+1) - self.h_j_rule(p)
-     
-        # f=self.feed_stage
-        # G_array = np.ndarray((self.N+1))
-        # for p in range(1,f):
-        #     G_array[p] = self.D*(self.h_j_rule(p-1) - self.h_j_rule(p))
-        # for p in range(f,f+1):
-        #     if self.F[self.feed_stage]==0:
-        #         print("the feed stages!!")
-        #     G_array[p] = self.D*self.h_j_rule(p-1) + self.B*self.h_j_rule(p) - self.F[self.feed_stage]*self.h_feed_rule(self.feed_stage)
-        # for p in range(f+1,self.N):
-        #     G_array[p] = self.B*(self.h_j_rule(p) - self.h_j_rule(p-1))
-        # for p in range(self.N,self.N+1):
-        #     G_array[p] = self.B*(self.h_j_rule(p) - self.h_j_rule(p-1))-self.Q_reboiler_rule()
-        
-        
-        # G_array_old = G_array.copy()
+
         
         G_array = np.ndarray((self.N+1))
         for p in range(1,self.N):
@@ -412,10 +389,7 @@ class Model:
         for p in range(self.N,self.N+1):
             G_array[p] = self.B*(self.h_j_rule(p) - self.h_j_rule(p-1))-self.Q_reboiler_rule()
         
-        # if np.any(np.abs(G_array_old-G_array)>1e-5):
-        #     print(G_array_old/1e4)
-        #     print(G_array/1e4)
-        #     pdb.set_trace()
+
         diagonal = np.array(list(mat[p,p] for p in range(0,self.N+1)))
         upperdiagonal = np.array(list(mat[p-1,p] for p in range(1,self.N+1)))
         lowerdiagonal = np.array(list(mat[p,p-1] for p in range(1,self.N+1)))
@@ -435,13 +409,7 @@ class Model:
          
         for i in range(1, self.N):
             self.L[i] = self.V[i + 1] - self.D + np.sum(self.F[:i+1])   ### chris modified the sum to not include a loop
-        # self.L[self.N] = self.B
-        
-        
-        
-        
-        
-    
+  
 
 
     def flow_rates_converged(self):
@@ -497,25 +465,6 @@ def make_ABC(V: np.array, L: np.array, K: np.array, F: np.array, z: np.array,
     
     assert abs(V[0]) < 1e-8, 'Vapor flow rate out of total condenser is non-zero!'
     
-    # mat = np.ndarray((N+1, N+1))
-    
-    # mat[0,0]=   -V[1] - (K[0]-1)*D
-    # f=feed_stage
-    # for p in range(1,f):
-    #     mat[p,p]= -(V[p+1]-D+V[p]*K[p])
-    # for p in range(f,N):
-    #     mat[p,p]= -(V[p+1]+W+V[p]*K[p])
-    # for p in range(N, N+1):
-    #     mat[p,p]= -(W+V[p]*K[p])
-        
-    # for p in range(1,N+1):
-    #     mat[p-1, p]=V[p]*K[p]
-    # for p in range(1,f+1):
-    #     mat[p, p-1]=V[p]-D
-    # for p in range(f+1,N+1):
-    #     mat[p, p-1]=V[p]+W
-        
-    # mat_old = mat.copy()
     
     mat = np.ndarray((N+1, N+1))
     
@@ -531,30 +480,13 @@ def make_ABC(V: np.array, L: np.array, K: np.array, F: np.array, z: np.array,
         mat[p-1, p]=V[p]*K[p]
     for p in range(1,N+1):
         mat[p, p-1]=V[p]-D+np.cumsum(F)[p-1]
-
-    
-    
-    # diagonal_old = np.array(list(mat_old[p,p] for p in range(0,N+1)))
-    # upperdiagonal_old = np.array(list(mat_old[p-1,p] for p in range(1,N+1)))
-    # lowerdiagonal_old = np.array(list(mat_old[p,p-1] for p in range(1,N+1)))
-    
     
     diagonal = np.array(list(mat[p,p] for p in range(0,N+1)))
     upperdiagonal = np.array(list(mat[p-1,p] for p in range(1,N+1)))
     lowerdiagonal = np.array(list(mat[p,p-1] for p in range(1,N+1)))
     feedarray = -np.array(F[:]) * z[:]
     
-    # if np.any(np.abs(diagonal_old-diagonal)>1e-6):
-    #     print('there is a problem with the new mat calc')
-    #     pdb.set_trace()
-    # if np.any(np.abs(upperdiagonal_old-upperdiagonal)>1e-6):
-    #     print('there is a problem with the newupperdiagc')
-    #     pdb.set_trace()
-    # if np.any(np.abs(lowerdiagonal_old-lowerdiagonal)>1e-6):
-    #     print('there is a problem with the lower')
-    #     pdb.set_trace()
-        
-    
+
     
     A=lowerdiagonal
     B=diagonal
@@ -587,10 +519,4 @@ def solve_component_mass_balances(*args):
 
 
 if __name__ == '__main__':
-    cls = Model(
-        ['n-Butane', 'n-Pentane', 'n-Octane'],
-        1000., 101325. * 2,
-        [0.2, 0.35, 0.45],
-        1.5, 550., 3, 2
-    )
-    cls.run(num_iter=100)
+    pass
