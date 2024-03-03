@@ -5,6 +5,9 @@ from scipy.sparse import linalg, diags
 import numpy as np
 import pdb
 import pandas as pd
+from matplotlib.pyplot import *
+
+
 
 
 class Model:
@@ -57,7 +60,12 @@ class Model:
         
         self.feed_stage = np.min(np.where(np.array(self.F_feed)>0)[0])##### XXXX this is a stand in for now
      
-        
+        self.x = {
+            key: np.zeros(self.num_stages) for key in components
+        }
+        self.y = {
+            key: np.zeros(self.num_stages) for key in components
+        }
         self.z = {
             key: np.zeros(self.num_stages) for key in components
         }
@@ -76,10 +84,60 @@ class Model:
 
         # solver parameters
         self.df = 1 # Dampening factor to prevent excessive oscillation of temperatures
-    
+        self.add_parameters(verbose=True)
+        
+        
     
     def check_inputs(self):
         """ Checks the feed values and feed composition to avoid errors"""
+        
+        
+        
+        if not (np.sum(self.F)-self.D-self.B==0):
+            print('error in F,D,B, sum')
+            return -1
+        
+    
+        total_mass_comp = np.sum(np.array(list((self.z[c] for c in self.components))),axis = 0)
+        non_zero_feed = np.where(self.F>0)[0]
+        if np.any(np.abs(total_mass_comp[non_zero_feed]-1)>0.01):
+            print('input error in total_mass_comp of feed')
+            print(total_mass_comp)
+            return -1
+        
+        
+        
+        return 0
+    
+        
+    
+    def set_feed(self,F,z_feed):
+        """allows setting of the feed to re-run the model. """
+        
+        self.F_feed = F
+        
+        self.z_feed = {key: val for key, val in zip(self.components, z_feed)}
+        self.z = {
+            key: np.zeros(self.num_stages) for key in self.components
+        }
+        self.l = {
+            key: np.zeros(self.num_stages) for key in self.components
+        }
+        for component in self.components:
+            self.z[component][:] = self.z_feed[component]
+        self.L = np.zeros(self.num_stages)
+        self.V = np.zeros(self.num_stages)
+        self.L_old = np.zeros(self.num_stages)
+        self.V_old = np.zeros(self.num_stages)
+        
+        self.F = self.F_feed.copy()
+        
+        self.feed_stage = np.min(np.where(np.array(self.F_feed)>0)[0])
+        self.B = sum(self.F_feed) - self.D
+        self.T_feed = self.T_feed_guess
+        self.T = np.zeros(self.num_stages)
+        self.T_old = np.zeros(self.num_stages)
+        self.K = {key: np.zeros(self.num_stages) for key in self.components}
         
         
     def add_parameters(self, verbose=False):
@@ -100,6 +158,7 @@ class Model:
         from distillation.equilibrium_data.antoine import Antoine
         
         
+            
         self.K_func = {
             key: DePriester(key, verbose) for key in self.components
         }
@@ -209,14 +268,13 @@ class Model:
 
     def Q_reboiler_rule(self):
         
-        feed_stages = np.where(np.array(self.F_feed)>0)[0]
-        
+        """ calculates the reboiler load using energy conservation in the column""" 
+
         return self.D * self.h_j_rule(0) + self.B * self.h_j_rule(self.N) \
-               - np.sum(np.array(self.F_feed) * np.array(list(self.h_feed_rule(s) for s in range(self.num_stages)))) - self.Q_condenser_rule()
+               - np.sum(np.array(self.F_feed) * np.array(list(self.h_feed_rule(s) for s in range(self.num_stages))))  \
+               - self.Q_condenser_rule()
                
-               
-        # return self.D * self.h_j_rule(0) + self.B * self.h_j_rule(self.N) \
-        #        - self.F_feed * self.h_feed_rule(self.feed_stage) - self.Q_condenser_rule()
+
 
     def step_3_to_step_6(self):
         num_iter = 0
@@ -310,17 +368,20 @@ class Model:
         self.L[:] = self.RR * self.D + np.cumsum(self.F_feed)
         
         self.L[self.N] = self.B
-        self.V[1:] = self.RR * self.D + self.D
+        self.L = smooth(self.L)
+        # self.V[1:] = self.RR * self.D + self.D
+        self.V[1:] = self.L[0:self.N] + self.D -np.cumsum(self.F_feed)[0:self.N]
+        self.V[0]=0
         
-        l = np.linspace(self.RR*self.D,self.B, self.N+1)
-        v=np.append([0],self.L[0:self.N]+self.D+np.cumsum(self.F[:self.N]))
+        # l = np.linspace(self.RR*self.D,self.B, self.N+1)
+        # v=np.append([0],self.L[0:self.N]+self.D+np.cumsum(self.F[:self.N]))
         
     
         
-        self.L[:]=l+0.001
-        for comp in self.components:
-            self.l[comp]=self.L*self.z_feed[comp]
-        self.V=v
+        # self.L[:]=l+0.001
+        # for comp in self.components:
+        #     self.l[comp]=self.L*self.z_feed[comp]
+        
 
     def T_is_converged(self):
         """
@@ -345,8 +406,11 @@ class Model:
         
         result = solve_diagonal(A, B, C, D)
         ### i have made the result back into the x values, rather than the L values
-        
+        self.x[component][:]=result
+        self.y[component][:]=self.x[component][:]*self.K[component]
         self.l[component][:] = result*self.L
+        
+        
         
         if np.any(np.isnan(result)):
             print("Nan result in solvecomponentmassbal")
@@ -354,7 +418,24 @@ class Model:
         
         self.L = sum(list((self.l[c] for c in self.components)))
         
+    def mass_fraction_sum_check(self):### mass fractions add up to 1 check
+    
+        total_mass_frac = sum(list((self.x[c] for c in self.components)))
+        if np.any(np.abs(total_mass_frac[:-1]-1)>0.03):
+            # print('x')
+            # print(self.x)
+            # print('y')
+            # print(self.y)
+            return -1
+        total_mass_frac = sum(list((self.y[c] for c in self.components)))
+        if np.any(np.abs(total_mass_frac[:-1]-1)>0.03):
+            # print('x')
+            # print(self.x)
+            # print('y')
+            # print(self.y)
+            return -1
         
+        return 0
         
         
     def update_flow_rates(self):
@@ -372,10 +453,8 @@ class Model:
         self.L_old[:] = self.L.copy()  #### chris changed this to the copy
         self.V_old[:] = self.V.copy() ## chris changed this to the copy
 
-        
-        
-        
-        #### chris mod lower case in paper is liquid
+
+        #### lower case in paper is liquid
         
         ### "mat" is the H matrix in the paper
         
@@ -414,7 +493,8 @@ class Model:
          
         for i in range(1, self.N):
             self.L[i] = self.V[i + 1] - self.D + np.sum(self.F[:i+1])   ### chris modified the sum to not include a loop
-  
+        for i in range(self.N, self.N+1): ### added on 3/3
+            self.L[i]=self.B*-self.V[i]
 
 
     def flow_rates_converged(self):
@@ -442,6 +522,116 @@ class Model:
 
         """
         return np.abs((new - old) / new).max() < self.flow_rate_tol
+    
+    def solve_self(self):
+        if self.check_inputs():
+            return -1
+        
+     
+        self.T_feed = self.bubble_T_feed(stage=self.feed_stage)   ### XXX need to update this to take in the array
+     
+        for i in self.stages:
+            self.T[i] = self.T_feed
+
+        self.initialize_flow_rates()
+        self.plot_molefractions()
+       
+        self.update_K_values()
+        
+        for i in self.components:
+            self.solve_component_mass_bal(i)
+        if self.mass_fraction_sum_check(): 
+            print('failing mass frac check 510')
+
+        for stage in self.stages:
+            self.T[stage] = self.bubble_T(stage)
+
+        self.solve_energy_balances()
+       
+        
+        iter = 0
+       
+        while not self.T_is_converged():
+            self.update_K_values()
+            for i in self.components:
+                self.solve_component_mass_bal(i)
+                if self.mass_fraction_sum_check(): 
+                    print('failing mass frac check 525')
+                
+            for stage in self.stages:
+                self.T[stage] = self.bubble_T(stage)
+            iter += 1
+            
+        
+        self.solve_energy_balances()
+       
+        
+        outer_loop = 0
+        inner_loop = 0
+        while not self.flow_rates_converged():
+            outer_loop += 1
+            for i in self.components:
+                self.solve_component_mass_bal(i)
+                if self.mass_fraction_sum_check(): 
+                    print('failing mass frac check 542')
+                
+            
+            for stage in self.stages:
+                self.T[stage] = self.bubble_T(stage)
+           
+            while not self.T_is_converged():
+                inner_loop += 1
+                self.update_K_values()
+                for i in self.components:
+                    self.solve_component_mass_bal(i)
+                    if self.mass_fraction_sum_check(): 
+                        print('failing mass frac check 554')
+                
+            
+                for stage in self.stages:
+                    self.T[stage] = self.bubble_T(stage)
+         
+            self.solve_energy_balances()
+            
+            if outer_loop>16:
+                break
+            
+        x = {}
+        y= {}
+        for i in self.components:
+            x[i] = self.l[i][:]/self.L[:]
+            y[i] = self.x[i]*self.K[i]
+            
+        self.y=y
+        self.x=x
+        
+    def plot_molefractions(self):
+        
+
+        # plot liquid-phase mole fractions
+        fig2, (ax1,ax2,ax3,ax4) = subplots(1,4)
+        
+        # calculate mole fractions
+        for i in self.components:
+            ax3.plot(self.stages, self.x[i], label=i)
+        ax3.legend()
+            
+        
+        ax2.plot(self.stages,self.L, label='L')
+        ax2.plot(self.stages, self.V, label='V')
+        ax2.set_xticks(range(self.N+1))
+        ax2.set_ylabel('Liquid phase mole fraction')
+        ax2.set_xlabel('Stage Number')
+        
+        ax1.plot(self.stages, self.T, 'o')
+        ax1.set_xlabel('Stage Number')
+        ax1.set_ylabel('Temperature [K]')
+        
+        
+    
+        ax2.legend()
+        return fig2, (ax1,ax2,ax3,ax4) 
+
 
 
 def make_ABC(V: np.array, L: np.array, K: np.array, F: np.array, z: np.array,
@@ -522,6 +712,20 @@ def solve_component_mass_balances(*args):
     
     return solve_diagonal(A, B, C, D)
 
-
+def smooth(spectrum,window_len=5,window='flat'):
+    
+    if spectrum.size < window_len:
+        raise ValueError("Input vector needs to be bigger than window size.")
+    if window_len<3:
+        return spectrum
+    
+    
+     
+    #moving average
+    w=np.ones(window_len,'d')
+    s=np.r_[spectrum[window_len-1:0:-1],spectrum[:],spectrum[-1:-window_len:-1]]        
+    out=np.convolve(w/w.sum(),s,mode='valid')[int((window_len-1)/2):int(-(window_len-1)/2)]
+    
+    return out
 if __name__ == '__main__':
     pass
