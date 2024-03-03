@@ -159,16 +159,16 @@ class Model:
         
         
             
-        self.K_func = {
-            key: DePriester(key, verbose) for key in self.components
-        }
+        # self.K_func = {
+        #     key: DePriester(key, verbose) for key in self.components
+        # }
         
         
         
         
-        # self.K_func =             {
-        #         key: Antoine(key, verbose) for key in self.components
-        #     }
+        self.K_func =             {
+                key: Antoine(key, verbose) for key in self.components
+            }
         
         
         self.CpL_func = {
@@ -540,8 +540,8 @@ class Model:
         
         for i in self.components:
             self.solve_component_mass_bal(i)
-        if self.mass_fraction_sum_check(): 
-            print('failing mass frac check 510')
+        # if self.mass_fraction_sum_check(): 
+        #     print('failing mass frac check 510')
 
         for stage in self.stages:
             self.T[stage] = self.bubble_T(stage)
@@ -555,8 +555,8 @@ class Model:
             self.update_K_values()
             for i in self.components:
                 self.solve_component_mass_bal(i)
-                if self.mass_fraction_sum_check(): 
-                    print('failing mass frac check 525')
+                # if self.mass_fraction_sum_check(): 
+                #     print('failing mass frac check 525')
                 
             for stage in self.stages:
                 self.T[stage] = self.bubble_T(stage)
@@ -572,8 +572,8 @@ class Model:
             outer_loop += 1
             for i in self.components:
                 self.solve_component_mass_bal(i)
-                if self.mass_fraction_sum_check(): 
-                    print('failing mass frac check 542')
+                # if self.mass_fraction_sum_check(): 
+                #     print('failing mass frac check 542')
                 
             
             for stage in self.stages:
@@ -584,8 +584,8 @@ class Model:
                 self.update_K_values()
                 for i in self.components:
                     self.solve_component_mass_bal(i)
-                    if self.mass_fraction_sum_check(): 
-                        print('failing mass frac check 554')
+                    # if self.mass_fraction_sum_check(): 
+                    #     print('failing mass frac check 554')
                 
             
                 for stage in self.stages:

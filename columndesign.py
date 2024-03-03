@@ -46,7 +46,7 @@ def solve_for_model(num,R,feedstage1,feedstage2,  _plot=True):
     
 
     model = am.Model(
-    components=['n-Butane','n-Pentane'],
+    components=['Decane','n-Octadecane'],
     F=F, # kmol/h
     P=2*1e6, # Pa
     z_feed = z,
@@ -69,7 +69,7 @@ df = pd.DataFrame( columns = ['Qcond', 'Qreboil', 'hfeed',
                               'TotalEnergyInput', 'MinEnergy', 'recovery',
                               'purity', 'reflux_ratio', 'num_stages', 'feedstage1', 'feedstage2'])
 
-product = 'n-Butane'
+product = 'n-Decane'
 
 num_stages = 12
 for reflux_ratio in [1.5]:#np.arange(1,2.5,0.5):
