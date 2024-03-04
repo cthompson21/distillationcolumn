@@ -1,0 +1,8 @@
+Name (unit KJ/mol),CAS No.,Value,T_ref,Units
+Methane,000-00-0,8,134,"""kJ/mol"""
+n-Butane,106-97-8,22.4,272.05,"""kJ/mol"""
+n-Pentane,109-66-0,25.8,309.2,"""kJ/mol"""
+n-Octane,111-65-9,34.41,398.8,"""kJ/mol"""
+ethanol,64-17-5,40.2,335,"""kJ/mol"""
+n-Decane,124-18-5,42,462,"""kJ/mol"""
+n-Octadecane,593-45-3,64,516,"""kJ/mol"""
