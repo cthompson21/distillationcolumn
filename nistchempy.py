@@ -245,7 +245,8 @@ class Compound():
             if spec.ok:
                 spec = Spectrum(self, spec_type, idx, spec.text)
                 getattr(self, spec_type).append(spec)
-                
+    def search_for_tables(self, ) :
+        return
     def get_thermo_condensed(self):
         '''
         Loads thermochemistry data
@@ -255,10 +256,7 @@ class Compound():
        
         if spec_type not in self._SPECS:
             raise ValueError(f'Bad spec_type value: {spec_type}')
-        # if 'c'+spec_type not in self.data_refs:
-        #     return
-        
-        
+     
         if self.ID!=None:
             request_input = self._NIST_URL + self._COMP_ID, {'ID': self.ID, 'Units': 'SI', 'Mask':'2#Thermo-Condensed'}
         elif self.name != None:
@@ -304,34 +302,38 @@ class Compound():
         ##### here, get the heat of vaporization
         tit=None
         ev_table=None
+        ev_tables_list=[]
         single_temp=False
         import operator
         temp ='\t'.join(tables.keys())
-        if 'Enthalpy of vaporization_1' in temp:
-            tit='Enthalpy of vaporization_1'
-            ev_table=tables[tit]
-        elif 'Enthalpy of vaporization' in temp:   
-            tit='Enthalpy of vaporization'
-            ev_table=tables[tit]
-        else:
-            ev_table==None
         
-        
-
-        if 'Tc (K)' in np.array(ev_table) or 'Tc (K)' in ev_table.columns  :
-                single_temp=False
-        elif "vapH (kJ/mol)" in '\t'.join(ev_table.columns):
-                single_temp=True
-                
-                self.delta_H_vap_300K = ev_table.to_numpy()[0,0]
-                self.delta_vap_H_constants = pd.DataFrame(columns = ['Enthalpy Vaporization (kJ/mol)','delta_H_vap_A','delta_H_vap_beta','delta_H_vap_Tc'],
-                                                          data = [[self.delta_H_vap_300K,-1,-1,-1]],
-                                                          index=[0])
-        else:
-            print("Cant decipher the tables")
-        
+        for table_title in tables.keys():
             
-        if single_temp==False:    
+            if 'Enthalpy of vaporization' in table_title:
+                ev_tables_list.append(tables[table_title])
+        
+        chosen_table=None
+        table_type = None
+        for ev_table in ev_tables_list:
+            if 'Tc (K)' in np.array(ev_table) or 'Tc (K)' in ev_table.columns:
+                chosen_table=ev_table
+                table_type = "temprange"
+                break
+            elif "vapH (kJ/mol)" in '\t'.join(ev_table.columns):
+                chosen_table = ev_table
+                table_type = "singletemp"
+        
+        if table_type==None: 
+            print("Cant decipher the tables")
+        elif table_type=='singletemp':
+            self.delta_H_vap_300K = ev_table.to_numpy()[0,0]
+            self.boilingpoint = ev_table.to_numpy()[0,1]
+            self.delta_vap_H_constants = pd.DataFrame(columns = ['Enthalpy Vaporization (kJ/mol)','delta_H_vap_A',
+                                                                 'delta_H_vap_beta','delta_H_vap_Tc','BP (K)'],
+                                                  data = [[self.delta_H_vap_300K,-1,-1,-1, self.boilingpoint]],
+                                                  index=[0])
+            
+        elif table_type=='temprange':
                 
                 
             if "Temperature (K)" in np.array(ev_table):
@@ -360,8 +362,9 @@ class Compound():
             T=np.arange(min_temp,max_temp+1)
             Tr = T/Tc
             self.delta_H_vap_300K = A*np.exp(-alpha*300/Tc)*(1-300/Tc)**beta
-            self.delta_vap_H_constants = pd.DataFrame(columns = ['Enthalpy Vaporization (kJ/mol)','delta_H_vap_A','delta_H_vap_beta','delta_H_vap_Tc'],
-                                                      data = [[delta_H_vap_300K,A,beta,Tc]],
+            self.delta_vap_H_constants = pd.DataFrame(columns = ['Enthalpy Vaporization (kJ/mol)','delta_H_vap_A',
+                                                                 'delta_H_vap_beta','delta_H_vap_Tc',],
+                                                      data = [[self.delta_H_vap_300K,A,beta,Tc,]],
                                                       index=[0])
             
                     
@@ -374,9 +377,6 @@ class Compound():
         if 'Antoine Equation Parameters' in tables.keys():
             
             if 'Temperature (K)' in tables['Antoine Equation Parameters'].columns:
-                
-                #log10(P) = A − (B / (T + C))
-                
                 
                 for row in range(len(tables['Antoine Equation Parameters'])):
                     try:
@@ -443,6 +443,49 @@ class Compound():
             
             
             #### now get heat capacities
+            
+    def get_boiling_point(self):
+        
+        if self.ID!=None:
+            request_input = self._NIST_URL + self._COMP_ID, {'ID': self.ID, 'Units': 'SI', 'Mask':'4#Thermo-Phase'}
+        elif self.name != None:
+            request_input = self._NIST_URL + self._COMP_ID, {'Name': self.name,'Units': 'SI', 'Mask':'4#Thermo-Phase'}
+        r = requests.get(*request_input)
+        if not r.ok:
+            return
+        soup = BeautifulSoup(re.sub('clss=', 'class=', r.text),
+                             features = 'html.parser')
+            
+        idxs = soup.findAll('table', )
+        titles=[]
+        
+        #### make dictionary with the table data and table title
+        for idx in idxs:
+           
+            
+            if 'aria-label' in idx.attrs.keys():
+                to_append = idx.attrs['aria-label']
+                while  to_append in titles:
+                    to_append+='_1'
+                    
+                titles.append(to_append)
+            else:
+                titles.append('')
+        tables=pd.read_html(r.text)
+        
+        tables = dict(zip(titles, tables))
+        
+        tit=None
+        
+        if 'One dimensional data' in tables.keys():
+            active_table = tables['One dimensional data']
+            if 'Tboil' in tables['One dimensional data'].to_numpy()[:,0]:
+                Tboilrow = np.where(tables['One dimensional data'].to_numpy()[:,0]=='Tboil')[0]
+                self.boiling_point = float(tables['One dimensional data'].to_numpy()[Tboilrow,1][0].split(' ')[0])
+        
+        
+        
+        
     def get_heat_capacities(self):
         
          
@@ -480,8 +523,8 @@ class Compound():
         if 'Constant pressure heat capacity of liquid' in tables.keys():
             
             if 'Temperature (K)' in tables['Constant pressure heat capacity of liquid'].columns:
-                print(tables['Constant pressure heat capacity of liquid'])
-                self.Cp_l = tables['Constant pressure heat capacity of liquid']['Cp,liquid (J/mol*K)']
+                
+                self.Cp_l = tables['Constant pressure heat capacity of liquid']['Cp,liquid (J/mol*K)'].mean()
                 print("Found Cp_l", self.Cp_l)
          
                 
@@ -521,8 +564,8 @@ class Compound():
         if 'Constant pressure heat capacity of gas' in tables.keys():
             
             if 'Temperature (K)' in tables['Constant pressure heat capacity of gas'].columns:
-                print(tables['Constant pressure heat capacity of gas'].columns)
-                self.Cp_g = tables['Constant pressure heat capacity of gas']['Cp,gas (J/mol*K)']
+                
+                self.Cp_g = tables['Constant pressure heat capacity of gas']['Cp,gas (J/mol*K)'].mean()
                 print("Found Cp_g", self.Cp_g)
         else:
             print("No tables appropriate for CpG found")
@@ -841,6 +884,9 @@ if __name__ == '__main__':
     for alkane in Hvap.columns:
         X=Compound(alkane, search_option='NAME')  ##hexane
         print(X.name)
+        X.get_boiling_point()
+        print(X.boiling_point)
+        continue
         X.get_heat_capacities()
         
         tables=X.get_thermo_condensed()

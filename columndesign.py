@@ -46,7 +46,7 @@ def solve_for_model(num,R,feedstage1,feedstage2,  _plot=True):
     
 
     model = am.Model(
-    components=['Decane','n-Octadecane'],
+    components=['acetic acid','Styrene'],
     F=F, # kmol/h
     P=2*1e6, # Pa
     z_feed = z,

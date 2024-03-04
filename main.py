@@ -164,29 +164,32 @@ class Model:
         # }
         
         
-        
-        
-        self.K_func =             {
+        self.CompoundData =  {
                 key: Antoine(key, verbose) for key in self.components
             }
         
+        # self.K_func =             {
+        #         key: self.CompoundData for key in self.components
+        #     }
         
-        self.CpL_func = {
-            key: CpL(key, verbose) for key in self.components
-        }
-        self.CpV_func = {
-            key: CpV(key, verbose) for key in self.components
-        }
-        self.dH_func = {
-            key: dH_vap(key, verbose) for key in self.components
-        }
-        self.T_ref = {
-            key: val.T_ref for key, val in self.dH_func.items()
-        }
+       
+        # self.CpL_func = {
+        #     key: CpL(key, verbose) for key in self.components
+        # }
+        # self.CpV_func = {
+        #     key: CpV(key, verbose) for key in self.components
+        # }
+        # self.dH_func = {
+        #     key: dH_vap(key, verbose) for key in self.components
+        # }
+        # self.T_ref = {
+        #     key: val.T_ref for key, val in self.dH_func.items()
+        # }
 
     def h_pure_rule(self, c, T):
         """rule for liquid enthalpy of pure component"""
-        return self.CpL_func[c].integral_dT(self.T_ref[c], T)
+        # return self.CpL_func[c].integral_dT(self.T_ref[c], T)
+        return self.CompoundData[c].liquid_enthalpy(T)
 
     def h_j_rule(self, stage):
         """Enthalpy of liquid on stage *j*.
@@ -201,7 +204,7 @@ class Model:
         :return: :math:`h_j` [J/kmol]
         """
         return sum(
-            self.x_ij_expr(c, stage) * self.h_pure_rule(c, self.T[stage]) for c in self.components
+            self.x_ij_expr(c, stage) * self.CompoundData[c].liquid_enthalpy(self.T[stage]) for c in self.components
         )
 
     def x_ij_expr(self, i, j):
@@ -226,12 +229,12 @@ class Model:
         :return: :math:`h` [J/kmol]
         """
         return sum(
-            self.z[c][stage] * self.h_pure_rule(c, self.T_feed) for c in self.components
+            self.z[c][stage] * self.CompoundData[c].liquid_enthalpy(self.T[stage]) for c in self.components
         )
 
     def H_pure_rule(self, c, T):
         """Rule for vapor enthalpy of pure component"""
-        return self.CpV_func[c].integral_dT(self.T_ref[c], T) + self.dH_func[c].eval()
+        return self.CompoundData[c].vapor_enthalpy(T)
 
     def H_j_rule(self, stage):
         """Enthalpy of vapor on stage *j*.
@@ -260,7 +263,7 @@ class Model:
         """
         
         
-        return self.K_func[i].eval_SI(self.T[j], self.P_feed) * self.x_ij_expr(i, j)
+        return self.CompoundData[i].K_func(self.T[j], self.P_feed) * self.x_ij_expr(i, j)
 
     def Q_condenser_rule(self):
         """Condenser requirement can be determined from balances around total condenser"""
@@ -307,7 +310,7 @@ class Model:
         """
        
         for c in self.components:
-            self.K[c][:] = self.K_func[c].eval_SI(self.T[:], self.P_feed)
+            self.K[c][:] = self.CompoundData[c].K_func(self.T[:], self.P_feed)
             
 
         self.T_old = self.T.copy()
@@ -332,7 +335,7 @@ class Model:
 
     def bubble_T(self, stage):
         l_total = sum(self.l[c][stage] for c in self.components)
-        K_vals = [self.K_func[c].eval_SI for c in self.components]
+        K_vals = [self.CompoundData[c].K_func for c in self.components]
         x_vals = [self.l[c][stage]/l_total for c in self.components]
         
         return bubble_point(x_vals, K_vals, self.P_feed, self.T_old[stage])
@@ -354,7 +357,7 @@ class Model:
             stage = self.feed_stage
         return bubble_point(
             [self.z_feed[i][stage] for i in self.components],
-            [self.K_func[i].eval_SI for i in self.components], self.P_feed, self.T_feed_guess
+            [self.CompoundData[c].K_func for c in self.components], self.P_feed, self.T_feed_guess
         )
 
     def initialize_flow_rates(self):
@@ -594,6 +597,7 @@ class Model:
             self.solve_energy_balances()
             
             if outer_loop>16:
+                print("outerloop did not converge in 16")
                 break
             
         x = {}
