@@ -35,13 +35,14 @@ class Model:
         self.components = components
         self.F_feed = F
         self.P_feed = P
+        self.p_tot = self.P_feed
         self.z_feed = {key: val for key, val in zip(components, z_feed)}
         self.RR = RR
         self.D = D
         self.B = sum(self.F_feed) - D
         self.N = len(F)-1  ### the index of the last stage (the reboiler)
         
-        self.T_feed_guess = T_feed_guess
+        
         self.K_func = {}
         self.CpL_func = {}
         self.CpV_func = {}
@@ -55,16 +56,18 @@ class Model:
         self.V = np.zeros(self.num_stages)
         self.L_old = np.zeros(self.num_stages)
         self.V_old = np.zeros(self.num_stages)
+        self.T_feed_guess = np.ones((self.num_stages,))*T_feed_guess
+        self.T_feed = self.T_feed_guess.copy()
         
         self.F = self.F_feed.copy()
         
         self.feed_stage = np.min(np.where(np.array(self.F_feed)>0)[0])##### XXXX this is a stand in for now
      
         self.x = {
-            key: np.zeros(self.num_stages) for key in components
+            key: np.ones(self.num_stages)/len(components) for key in components
         }
         self.y = {
-            key: np.zeros(self.num_stages) for key in components
+            key: np.zeros(self.num_stages)/len(components) for key in components
         }
         self.z = {
             key: np.zeros(self.num_stages) for key in components
@@ -77,7 +80,7 @@ class Model:
             
 
 
-        self.T_feed = self.T_feed_guess
+        
         self.T = np.zeros(self.num_stages)
         self.T_old = np.zeros(self.num_stages)
         self.K = {key: np.zeros(self.num_stages) for key in self.components}
@@ -261,17 +264,18 @@ class Model:
         :return: gas-phase mole fraction on stage
         """
         
-        
+        # return self.K[i][j] * self.x_ij_expr(i, j)
         return self.K_func[i].eval_SI(self.T[j], self.P_feed) * self.x_ij_expr(i, j)
 
     def Q_condenser_rule(self):
         """Condenser requirement can be determined from balances around total condenser"""
+        # pdb.set_trace()
         return self.D * (1. + self.RR) * (self.h_j_rule(0) - self.H_j_rule(1))
 
     def Q_reboiler_rule(self):
         
         """ calculates the reboiler load using energy conservation in the column""" 
-
+        
         return self.D * self.h_j_rule(0) + self.B * self.h_j_rule(self.N) \
                - np.sum(np.array(self.F_feed) * np.array(list(self.h_feed_rule(s) for s in range(self.num_stages))))  \
                - self.Q_condenser_rule()
@@ -307,9 +311,11 @@ class Model:
         .. include:: step3.rst
 
         """
-       
+        
+        # pdb.set_trace()
         for c in self.components:
             self.K[c][:] = self.K_func[c].eval_SI(self.T[:], self.P_feed)
+            # self.K[c][:] = self.K_func[c].eval_SI(self.T[:], self.p_tot)
             
 
         self.T_old = self.T.copy()
@@ -354,10 +360,14 @@ class Model:
         if stage==None:
             print('USING THE HIGHEST FEED STAGE TO SET THE BUBBLE POINT FOR THE FEED.  THIS MAY CAUSE INCORRECT RESULTS')
             stage = self.feed_stage
-        return bubble_point(
+        
+        t_out = np.zeros(self.T_feed.shape)
+        for stage in np.where(self.F>0)[0]:
+            t_out[stage]=bubble_point(
             [self.z_feed[i][stage] for i in self.components],
-            [self.K_func[i].eval_SI for i in self.components], self.P_feed, self.T_feed_guess
-        )
+            [self.K_func[i].eval_SI for i in self.components], self.P_feed, self.T_feed_guess[stage]
+            )
+        return t_out
 
     def initialize_flow_rates(self):
         """
@@ -496,7 +506,7 @@ class Model:
         for i in range(1, self.N):
             self.L[i] = self.V[i + 1] - self.D + np.sum(self.F[:i+1])   ### chris modified the sum to not include a loop
         for i in range(self.N, self.N+1): ### added on 3/3
-            self.L[i]=self.B*-self.V[i]
+            self.L[i]=self.B-self.V[i]
 
 
     def flow_rates_converged(self):
@@ -534,7 +544,11 @@ class Model:
             self.T_feed = self.bubble_T_feed(stage=self.feed_stage)   ### XXX need to update this to take in the array
      
             for i in self.stages:
-                self.T[i] = self.T_feed
+                if self.T_feed[i] ==0:
+                    self.T[i]=np.mean(self.T_feed[self.T_feed!=0])
+                else:
+                    self.T[i] = self.T_feed[i]
+            
     
             self.initialize_flow_rates()
             
@@ -557,9 +571,6 @@ class Model:
             self.update_K_values()
             for i in self.components:
                 self.solve_component_mass_bal(i)
-            # if self.mass_fraction_sum_check(): 
-            #     print('failing mass frac check 525')
-                
             for stage in self.stages:
                 self.T[stage]=(self.bubble_T(stage)+self.T[stage])/2
             iter += 1
@@ -572,30 +583,17 @@ class Model:
         inner_loop = 0
         while not self.flow_rates_converged():
             outer_loop += 1
-            for i in self.components:
-                self.solve_component_mass_bal(i)
-            # if self.mass_fraction_sum_check(): 
-            #     print('failing mass frac check 542')
-                
-            
-            for stage in self.stages:
-                self.T[stage]=(self.bubble_T(stage)+self.T[stage])/2
-           
             while not self.T_is_converged():
                 inner_loop += 1
                 self.update_K_values()
                 for i in self.components:
                     self.solve_component_mass_bal(i)
-                # if self.mass_fraction_sum_check(): 
-                #     print('failing mass frac check 554')
-                
-            
                 for stage in self.stages:
                     self.T[stage] = (self.bubble_T(stage)+self.T[stage])/2
          
             self.solve_energy_balances()
             
-            if outer_loop>16:
+            if outer_loop>256:
                 break
             
         
