@@ -2,6 +2,8 @@ import pandas as pd
 import os
 import nistchempy as nist
 import pdb
+import numpy as np
+from matplotlib.pyplot import *
 
 def read_chart(f_name):
     data = {}
@@ -31,9 +33,12 @@ class Antoine:
             
             self.delta_H_vap,self.delta_H_vap_A,self.delta_H_vap_beta, self.delta_H_vap_Tc, = \
                 x.loc[compound,['Enthalpy Vaporization (kJ/mol)','delta_H_vap_A','delta_H_vap_beta','delta_H_vap_Tc',]]
-                
+            self.delta_H_vap = float(self.delta_H_vap)
+            self.delta_H_vap*=1e6  ### convert from kJ/mol to J/kmol
+            self.delta_H_vap_A*=1e6  ### convert from kJ/mol to J/kmol    
             self.boiling_point=x.loc[compound, 'BP (K)'] 
-            self.CpL=x.loc[compound, 'CpL']
+            self.CpL=x.loc[compound, 'CpL']*1000 ### convert to J/kmol-K
+            self.CpG=4.*8.314*1000
             return 
         else:
             print('Compound not found in database!', compound)
@@ -43,6 +48,8 @@ class Antoine:
                 print("Searching NIST Webbook for", X.name)
                 
                 tables=X.get_thermo_condensed()
+                X.get_heat_capacities()
+                X.get_boiling_point()
                 self.A, self.B, self.C = X.antoine_parameters
                 self.delta_H_vap,self.delta_H_vap_A,self.delta_H_vap_beta, self.delta_H_vap_Tc,= X.delta_vap_H_constants.loc[0,['Enthalpy Vaporization (kJ/mol)',
                                                                                                                                 'delta_H_vap_A','delta_H_vap_beta',
@@ -54,10 +61,10 @@ class Antoine:
                 self.delta_H_vap_A*=1e6  ### convert from kJ/mol to J/kmol
                 
                 
-                X.get_heat_capacities()
-                X.get_boiling_point()
+                
                 self.CpL = X.Cp_l*1000  ## from J/mol-K to J/kmol-K
                 self.boiling_point = X.boiling_point
+                self.CpG=4.*8.314*1000
             except:
                 print("Could not find the compound in NIST webbook.  Try a different name")
                 raise
@@ -91,19 +98,54 @@ class Antoine:
         return
         
 
-
-    def K_func(self, T, p):
+    def p_vap(self,T):
         """
 
         :param T: temperature in K
-        :param p: pressure in Pa
-        :return: K-value for component at specific *T* and *p*
+        
+        :return: vapor pressure of component at specific *T* 
         """
         return 10**(self.A-(self.B/(T+self.C)))
+        
+    def K_func(self, T, p_tot):
+        """
+
+        :param T: temperature in K
+        :param p: pressure in bar
+        :return: K-value for component at specific *T* and *p*
+        """
+        if np.any(p_tot> 1000):
+            # print("the input of pressure for bubblepoint is being given in pascals!  Converting to bar")
+            p_tot=p_tot/100000
+        
+        return 10**(self.A-(self.B/(T+self.C)))/p_tot
     
     def liquid_enthalpy(self,T):
-        return (T-self.boiling_point)*self.CpL
+        """gets a relative liquid enthalpy compared to reference temperature (boiling point)
+        
+        This is equivalent to the integral_dT function in the old CpL class
+        """
+        
+        return(T-self.boiling_point)*self.CpL
     
     def vapor_enthalpy(self,T):
-        return (T-self.boiling_point)*self.CpL + self.delta_H_vap
         
+        
+        return (T-self.boiling_point)*self.CpG + self.delta_H_vap
+
+
+r=None        
+if __name__ =='__main__':
+    from distillation.equilibrium_data.depriester_charts import DePriester
+    a=DePriester('n-Pentane')
+    os.chdir('C:/Users/chris/My Drive/PyScripts/ViaPy')
+    r=Antoine('pentane') 
+    
+    T= np.arange(200,400)
+    
+    ak=a.eval(T,101325)
+    rk = r.K_func(T,101325)
+    
+    plot(T,ak)
+    plot(T,rk)
+    legend(['Depreiest,','Antoine'])

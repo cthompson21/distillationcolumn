@@ -11,7 +11,7 @@ from matplotlib.pyplot import *
 import distillation.amundson_1958.main as am
 import itertools
 import seaborn as sns
-
+import os
 
 
 
@@ -38,15 +38,15 @@ def solve_for_model(num,R,feedstage1,feedstage2,  _plot=True):
         z[1][feedstage1] = 0.5
         z[0][feedstage1] = 0.5
     else:
-        z[1][feedstage1] = 0.25
-        z[1][feedstage2] = 0.75
+        z[1][feedstage1] = 0.75
+        z[1][feedstage2] = 0.25
         z[0][feedstage1] += (1-z[1][feedstage1])
         z[0][feedstage2] += (1-z[1][feedstage2])
  
     
 
     model = am.Model(
-    components=['acetic acid','Styrene'],
+    components=['butane','pentane'],
     F=F, # kmol/h
     P=2*1e6, # Pa
     z_feed = z,
@@ -69,16 +69,28 @@ df = pd.DataFrame( columns = ['Qcond', 'Qreboil', 'hfeed',
                               'TotalEnergyInput', 'MinEnergy', 'recovery',
                               'purity', 'reflux_ratio', 'num_stages', 'feedstage1', 'feedstage2'])
 
-product = 'n-Decane'
-
+product = 'Butane'
+os.chdir('H:/My Drive/PyScripts/ViaPy')
 num_stages = 12
-for reflux_ratio in [1.5]:#np.arange(1,2.5,0.5):
+for repeat in [0]:#np.arange(1,2.5,0.5):
+    reflux_ratio=1
     model=solve_for_model(num_stages,reflux_ratio
                           ,6,6, _plot=True)
     
+    purity=0.98
+    while model.get_purity('butane')<purity:
+        print(model.get_purity('butane'), model.RR)
+        model.RR+=0.1
+        model.solve_self()
+        
+        
+    
+    if model.get_purity('butane')>purity:
+        print("got it")
     model.plot_molefractions()
     break
     # for num in np.arange(5,12,1):
+    
     for feedstage1, feedstage2 in itertools.product(np.arange(6,11,1), np.arange(2,8,1)):
         
         
@@ -98,8 +110,8 @@ for reflux_ratio in [1.5]:#np.arange(1,2.5,0.5):
             z[1][feedstage1] = 0.5
             z[0][feedstage1] = 0.5
         else:
-            z[1][feedstage1] = 0.25
-            z[1][feedstage2] = 0.75
+            z[1][feedstage1] = 0.75
+            z[1][feedstage2] = 0.25
             z[0][feedstage1] += (1-z[1][feedstage1])
             z[0][feedstage2] += (1-z[1][feedstage2])
         if np.any(z[0]>1):
@@ -113,7 +125,16 @@ for reflux_ratio in [1.5]:#np.arange(1,2.5,0.5):
             break
         print(max(F), max(z[0]), max(z[1]))
         model.set_feed(F,z)
-        model.solve_self()
+        purity=0.98
+        while model.get_purity(product)<purity:
+            model.R+=1
+            model.solve_self()
+            
+            
+        
+        if model.get_purity(product)>purity:
+            print("got it")
+        
         
         # suptitle(str(num_stages)+' stages')
         # EnergyBalance = model.Q_reboiler_rule()+model.Q_condenser_rule()-model.h_feed_rule(model.feed_stage)
@@ -144,7 +165,7 @@ for reflux_ratio in [1.5]:#np.arange(1,2.5,0.5):
 df.index = np.arange(df.shape[0])
 fig, ((ax1,ax2), (ax3,ax4)) = subplots(2,2)
 
-df.to_excel('C:/Users/chris/Desktop/DistillationModel1.xlsx')
+df.to_excel('C:/Users/cthompson/Desktop/DistillationModel1.xlsx')
 sns.lineplot(data=df, x='num_stages', y='TotalEnergyInput', hue='reflux_ratio', ax=ax1)
 sns.lineplot(data=df, x='num_stages', y='purity', hue='reflux_ratio', ax=ax2)
 sns.lineplot(data=df, x='num_stages', y='Qcond', hue='reflux_ratio', ax=ax3)

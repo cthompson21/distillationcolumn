@@ -61,10 +61,10 @@ class Model:
         self.feed_stage = np.min(np.where(np.array(self.F_feed)>0)[0])##### XXXX this is a stand in for now
      
         self.x = {
-            key: np.zeros(self.num_stages) for key in components
+            key: np.ones(self.num_stages)/len(self.components) for key in components
         }
         self.y = {
-            key: np.zeros(self.num_stages) for key in components
+            key: np.ones(self.num_stages)/len(self.components) for key in components
         }
         self.z = {
             key: np.zeros(self.num_stages) for key in components
@@ -77,16 +77,20 @@ class Model:
             
 
 
-        self.T_feed = self.T_feed_guess
+        self.T_feed_guess = np.ones((self.num_stages,))*T_feed_guess
+        self.T_feed = self.T_feed_guess.copy()
         self.T = np.zeros(self.num_stages)
         self.T_old = np.zeros(self.num_stages)
         self.K = {key: np.zeros(self.num_stages) for key in self.components}
 
         # solver parameters
-        self.df = 1 # Dampening factor to prevent excessive oscillation of temperatures
+        self.df = 0.3 # Dampening factor to prevent excessive oscillation of temperatures
         self.add_parameters(verbose=True)
         
         
+    def get_purity(self, product):
+        return self.x[product][0]
+    
     
     def check_inputs(self):
         """ Checks the feed values and feed composition to avoid errors"""
@@ -214,7 +218,7 @@ class Model:
         :param j: stage number
         :return: mole fraction on stage
         """
-        return self.l[i][j] / self.L[j]
+        return self.x[i][j]
 
     def h_feed_rule(self, stage):
         """Enthalpy of liquid in feed mixture
@@ -262,8 +266,8 @@ class Model:
         :return: gas-phase mole fraction on stage
         """
         
-        
-        return self.CompoundData[i].K_func(self.T[j], self.P_feed) * self.x_ij_expr(i, j)
+        return self.y[i][j]
+        # return self.CompoundData[i].K_func(self.T[j], self.P_feed) * self.x_ij_expr(i, j)
 
     def Q_condenser_rule(self):
         """Condenser requirement can be determined from balances around total condenser"""
@@ -279,43 +283,35 @@ class Model:
                
 
 
-    def step_3_to_step_6(self):
-        num_iter = 0
-        while not self.T_is_converged():
-            self.update_K_values()
-            for i in self.components:
-                self.solve_component_mass_bal(i)
-            self.update_T_values()
-            num_iter += 1
-        print('while loop exits with %i iterations' % num_iter)
-
-    def run(self):
-        self.generate_initial_guess()
-        self.step_3_to_step_6()
-        self.solve_energy_balances()
-        main_loop = 0
-        while not self.flow_rates_converged():
-            for i in self.components:
-                self.solve_component_mass_bal(i)
-            self.update_T_values()
-            self.step_3_to_step_6()
-            self.solve_energy_balances()
-            main_loop += 1
+   
            
 
-    def update_K_values(self):
+    def update_K_values(self, damp=0):
         """
         .. include:: step3.rst
 
         """
-       
+        
+        ####updtaed to include p_tot calculation
+        
+        
+        p_tot = np.sum((self.CompoundData[c].p_vap(self.T)*self.x[c] for c in self.components), axis=0)
+        
+        p_tot[p_tot==0]=0.001
+        self.p_tot = p_tot
+        # self.p_tot=np.ones(self.T.shape)*self.P_feed
         for c in self.components:
-            self.K[c][:] = self.CompoundData[c].K_func(self.T[:], self.P_feed)
-            
+            self.K[c][:] = (self.CompoundData[c].K_func(self.T,p_tot)+damp*self.K[c])/(1+damp)
+        
+        damp_needed=False
+        for c in self.components:
+            if np.any(self.K[c]>100000) or np.any(self.K[c]<1e-10):
+                print('K getting off rails', self.K)
+                damp_needed=True
 
         self.T_old = self.T.copy()
 
-    def update_T_values(self):
+    def update_T_values(self, damp=1):
         """Update temperatures in all stages
         by performing bubble point calculation
 
@@ -323,22 +319,24 @@ class Model:
             vectorize with matrix multiplication
 
         """
-        
-        
-        
-        # update from old calculations
-        for i in range(self.num_stages):
-            # calculate stage temperature now that all liquid-phase mole fractions are known
-            self.T[i] = self.T_old[i] + self.df * (
-                    self.bubble_T(i) - self.T_old[i]
-            )
+
+        for stage in self.stages:
+            self.T[stage]=(self.bubble_T(stage)+damp*self.T[stage])/(damp+1)
+        if np.any(self.T >10000):
+            print("T's are getting high")
+        if np.any(self.T <20):
+            print("T's are getting low")
+        self.T_old=self.T.copy()
 
     def bubble_T(self, stage):
-        l_total = sum(self.l[c][stage] for c in self.components)
+        # l_total = sum(self.l[c][stage] for c in self.components)
         K_vals = [self.CompoundData[c].K_func for c in self.components]
-        x_vals = [self.l[c][stage]/l_total for c in self.components]
-        
-        return bubble_point(x_vals, K_vals, self.P_feed, self.T_old[stage])
+        # x_vals1 = [self.l[c][stage]/l_total for c in self.components]
+        x_vals = [self.x[c][stage] for c in self.components]
+        x_vals/=sum(x_vals)
+        p_tot = sum(self.K[c][stage]*self.x[c][stage] for c in self.components)
+       
+        return bubble_point(x_vals, K_vals, p_tot, self.T_old[stage])
 
     def calculate_T_feed(self):
         self.T_feed = self.bubble_T_feed()
@@ -347,18 +345,33 @@ class Model:
     def initialize_stage_temperatures(self):
         self.T[:] = self.T_feed
 
+    # def bubble_T_feed(self, stage=None):
+    #     """
+    #     .. include: calculate_feed_temperature.rst
+
+    #     """
+    #     if stage==None:
+    #         print('USING THE HIGHEST FEED STAGE TO SET THE BUBBLE POINT FOR THE FEED.  THIS MAY CAUSE INCORRECT RESULTS')
+    #         stage = np.where(self.F>0)[0][0]
+    #     return bubble_point(
+    #         [self.z_feed[i][stage] for i in self.components],
+    #         [self.CompoundData[c].K_func for c in self.components], self.P_feed, self.T_feed_guess
+    #     )
+    
     def bubble_T_feed(self, stage=None):
         """
         .. include: calculate_feed_temperature.rst
 
         """
-        if stage==None:
-            print('USING THE HIGHEST FEED STAGE TO SET THE BUBBLE POINT FOR THE FEED.  THIS MAY CAUSE INCORRECT RESULTS')
-            stage = self.feed_stage
-        return bubble_point(
-            [self.z_feed[i][stage] for i in self.components],
-            [self.CompoundData[c].K_func for c in self.components], self.P_feed, self.T_feed_guess
-        )
+        
+        
+        t_out = np.zeros(self.T_feed.shape)
+        for stage in np.where(self.F>0)[0]:
+            t_out[stage]=bubble_point(
+                [self.z_feed[c][stage] for c in self.components],
+                [self.CompoundData[c].K_func for c in self.components],
+                self.P_feed, self.T_feed_guess[stage]            )
+        return t_out
 
     def initialize_flow_rates(self):
         """
@@ -371,19 +384,11 @@ class Model:
         self.L[:] = self.RR * self.D + np.cumsum(self.F_feed)
         
         self.L[self.N] = self.B
-        self.L = smooth(self.L)
+        # self.L = smooth(self.L)
         # self.V[1:] = self.RR * self.D + self.D
         self.V[1:] = self.L[0:self.N] + self.D -np.cumsum(self.F_feed)[0:self.N]
         self.V[0]=0
         
-        # l = np.linspace(self.RR*self.D,self.B, self.N+1)
-        # v=np.append([0],self.L[0:self.N]+self.D+np.cumsum(self.F[:self.N]))
-        
-    
-        
-        # self.L[:]=l+0.001
-        # for comp in self.components:
-        #     self.l[comp]=self.L*self.z_feed[comp]
         
 
     def T_is_converged(self):
@@ -396,7 +401,7 @@ class Model:
         eps = np.abs(self.T - self.T_old)
         return eps.max() < self.temperature_tol
 
-    def solve_component_mass_bal(self, component):
+    def solve_component_mass_bal(self, component, damp = 0.5):
         """Solve component mass balances
 
         .. todo:
@@ -409,36 +414,49 @@ class Model:
         
         result = solve_diagonal(A, B, C, D)
         ### i have made the result back into the x values, rather than the L values
-        self.x[component][:]=result
+        
+        self.cmb_resid = np.sum((result-self.x[component])**2)
+        self.x[component][:]=  (damp*self.x[component][:]+result)/(1+damp)
         self.y[component][:]=self.x[component][:]*self.K[component]
-        self.l[component][:] = result*self.L
+        self.y[component][self.y[component]>1]=1
+        self.l[component][:] = self.x[component][:]*self.L
+        
         
         
         
         if np.any(np.isnan(result)):
             print("Nan result in solvecomponentmassbal")
+            
             return -1
         
-        self.L = sum(list((self.l[c] for c in self.components)))
+        # self.L = sum(list((self.l[c] for c in self.components)))
         
     def mass_fraction_sum_check(self):### mass fractions add up to 1 check
-    
+        # print('checking sum of mass fraction of liquid and solid')
         total_mass_frac = sum(list((self.x[c] for c in self.components)))
         if np.any(np.abs(total_mass_frac[:-1]-1)>0.03):
-            # print('x')
-            # print(self.x)
-            # print('y')
-            # print(self.y)
-            return -1
+            failure=True
+            # print('failed liquid composition')
         total_mass_frac = sum(list((self.y[c] for c in self.components)))
         if np.any(np.abs(total_mass_frac[:-1]-1)>0.03):
-            # print('x')
-            # print(self.x)
-            # print('y')
-            # print(self.y)
+            failure=True
+            # print('failed liquid composition')
             return -1
         
         return 0
+    
+    def check_self(self):
+        return 0
+        if np.any(self.L<0):
+            print('L value less than 0')
+            return -1
+        if np.any(self.y>1) or np.any(self.y<0):
+            print('y value less than 0 greater tan 1')
+            return -1
+        if np.any(self.x>1) or np.any(self.x<0):
+            print('x value less than 0 greater tan 1')
+            return -1
+            
         
         
     def update_flow_rates(self):
@@ -450,7 +468,7 @@ class Model:
         for i in range(2, self.num_stages):
             self.V[i] = self.L[i - 1] + self.D - sum(self.F[k] for k in range(i))
 
-    def solve_energy_balances(self):
+    def solve_energy_balances(self, damp=1):
         """Solve energy balances"""
 
         self.L_old[:] = self.L.copy()  #### chris changed this to the copy
@@ -489,15 +507,18 @@ class Model:
             shape=(self.N, self.N),
             format='csr'
         )
-        self.V[1:] = linalg.spsolve(A, G_array[1:])
+        self.V[1:] = (self.V[1:]*damp+linalg.spsolve(A, G_array[1:]))/(1+damp)
+        self.V[0]=0
         ###############end chris mod
-        self.L[0] = self.RR * self.D
-       
-         
+        self.L[0] = self.RR * self.D         
         for i in range(1, self.N):
             self.L[i] = self.V[i + 1] - self.D + np.sum(self.F[:i+1])   ### chris modified the sum to not include a loop
         for i in range(self.N, self.N+1): ### added on 3/3
-            self.L[i]=self.B*-self.V[i]
+            self.L[i]=self.B-self.V[i]
+            if self.L[i]<0:
+                self.L[i]=self.L[i-1]
+            
+      
 
 
     def flow_rates_converged(self):
@@ -527,87 +548,170 @@ class Model:
         return np.abs((new - old) / new).max() < self.flow_rate_tol
     
     def solve_self(self):
+        
         if self.check_inputs():
             return -1
         
-     
-        self.T_feed = self.bubble_T_feed(stage=self.feed_stage)   ### XXX need to update this to take in the array
-     
-        for i in self.stages:
-            self.T[i] = self.T_feed
+        reinit=True
+        if reinit:
+            self.T_feed = self.bubble_T_feed()   ### XXX need to update this to take in the array  Something not working heree!!!
+         
+            for i in self.stages:
+                if self.T_feed[i] ==0:
+                    self.T[i]=np.mean(self.T_feed[self.T_feed!=0])
+                else:
+                    self.T[i] = self.T_feed[i]
 
-        self.initialize_flow_rates()
-        self.plot_molefractions()
-       
-        self.update_K_values()
-        
+            self.initialize_flow_rates()
+           
+            
+           
+        self.update_K_values(damp=0)
         for i in self.components:
-            self.solve_component_mass_bal(i)
-        # if self.mass_fraction_sum_check(): 
-        #     print('failing mass frac check 510')
-
-        for stage in self.stages:
-            self.T[stage] = self.bubble_T(stage)
-
-        self.solve_energy_balances()
+            self.solve_component_mass_bal(i,damp=1)
+        self.update_T_values(damp=1)
+        self.solve_energy_balances(damp=1)
        
         
-        iter = 0
+        iter_count = 0
        
         while not self.T_is_converged():
-            self.update_K_values()
+            self.update_K_values(damp=0)
             for i in self.components:
-                self.solve_component_mass_bal(i)
-                # if self.mass_fraction_sum_check(): 
-                #     print('failing mass frac check 525')
-                
-            for stage in self.stages:
-                self.T[stage] = self.bubble_T(stage)
-            iter += 1
+                self.solve_component_mass_bal(i,damp=1)
+            self.update_T_values(damp=1)
+            iter_count += 1
+            print(iter_count)
             
-        
         self.solve_energy_balances()
+        
+         
        
         
         outer_loop = 0
         inner_loop = 0
         while not self.flow_rates_converged():
             outer_loop += 1
-            for i in self.components:
-                self.solve_component_mass_bal(i)
-                # if self.mass_fraction_sum_check(): 
-                #     print('failing mass frac check 542')
-                
-            
-            for stage in self.stages:
-                self.T[stage] = self.bubble_T(stage)
            
             while not self.T_is_converged():
                 inner_loop += 1
-                self.update_K_values()
+                self.update_K_values(damp=0)
                 for i in self.components:
-                    self.solve_component_mass_bal(i)
-                    # if self.mass_fraction_sum_check(): 
-                    #     print('failing mass frac check 554')
-                
-            
-                for stage in self.stages:
-                    self.T[stage] = self.bubble_T(stage)
+                    self.solve_component_mass_bal(i,damp=0)
+                self.update_T_values(damp=0)
          
             self.solve_energy_balances()
             
-            if outer_loop>16:
-                print("outerloop did not converge in 16")
+            if outer_loop>512:
                 break
+        return 
+        # if self.check_inputs():
+        #     return -1
+        
+     
+        # self.T_feed = self.bubble_T_feed()   ### XXX need to update this to take in the array  Something not working heree!!!
+     
+        # for i in self.stages:
+        #     if self.T_feed[i] ==0:
+        #         self.T[i]=np.mean(self.T_feed[self.T_feed!=0])
+        #     else:
+        #         self.T[i] = self.T_feed[i]
+                
             
-        x = {}
-        y= {}
-        for i in self.components:
-            x[i] = self.l[i][:]/self.L[:]
-            y[i] = self.x[i]*self.K[i]
+        # self.initialize_flow_rates()  ## initializes V and L
+        
+        
+        # for repeat in range(15):
+        #     self.update_K_values()
+        #     # print('intiail mass balance', repeat)
+        #     for i in self.components:
+                
+        #         self.solve_component_mass_bal(i)
+        #     self.check_equilibria()
             
-        self.y=y
-        self.x=x
+    
+        #     for stage in self.stages:
+        #         print(self.bubble_T(stage), self.T[stage])
+        #         self.T[stage] = (self.T[stage]+self.bubble_T(stage))/2 #### this damping seemed to help a lot with convergence
+            
+        #     if self.cmb_resid< 0.01:
+        #         break
+        
+        # # print('intiating first energy balance')
+        # self.solve_energy_balances()
+        
+        
+        # iter = 0
+        
+        
+        # # print('Iint first lookp 561')
+        # while not self.T_is_converged():
+        #     self.update_K_values()
+            
+        #     print(self.K)
+        #     for i in self.components:
+        #         self.solve_component_mass_bal(i, damp=1)
+        #     print(self.cmb_resid)
+        #     # if self.mass_fraction_sum_check(): 
+        #     #     print('failing mass frac check 525')
+            
+        #     for stage in self.stages:
+        #         (self.T[stage]+self.bubble_T(stage))/2
+        #     iter += 1
+            
+            
+        
+        # self.solve_energy_balances()
+        
+        
+       
+        # print('Iint main lookp 576')
+        # outer_loop = 0
+        # inner_loop = 0
+        # while not self.flow_rates_converged():
+        #     outer_loop += 1
+        #     for i in self.components:
+        #         self.solve_component_mass_bal(i)
+        #     self.mass_fraction_sum_check()
+        #     self.check_equilibria()
+                
+                
+            
+        #     for stage in self.stages:
+        #         (self.T[stage]+self.bubble_T(stage))/2
+           
+        #     while not self.T_is_converged():
+        #         inner_loop += 1
+        #         self.update_K_values()
+        #         for i in self.components:
+        #             self.solve_component_mass_bal(i)
+        #         self.mass_fraction_sum_check()
+        #         self.check_equilibria()
+            
+        #         for stage in self.stages:
+        #             (self.T[stage]+self.bubble_T(stage))/2
+         
+        #     self.solve_energy_balances()
+            
+        #     if outer_loop>256:
+        #         print("outerloop did not converge in 16")
+        #         break
+        # print( outer_loop)
+            
+        
+            
+    def check_equilibria(self):
+        
+        r = []
+        failure=False
+        for c in self.components:
+            res = self.y[c]-self.K[c]*self.x[c]
+            if np.sum(res**2)>0.01:
+                failure=True
+        if failure==True:
+            print("Failed equilibria")
+            
+        return
         
     def plot_molefractions(self):
         
@@ -619,6 +723,10 @@ class Model:
         for i in self.components:
             ax3.plot(self.stages, self.x[i], label=i)
         ax3.legend()
+        
+        for idx in np.where(self.F>0)[0]:
+            
+            ax3.plot([idx,], [self.z[self.components[0]][idx]], 'or')
             
         
         ax2.plot(self.stages,self.L, label='L')
@@ -732,4 +840,43 @@ def smooth(spectrum,window_len=5,window='flat'):
     
     return out
 if __name__ == '__main__':
-    pass
+    import os
+    os.chdir('C:/Users/chris/My Drive/PyScripts/ViaPy')
+    feedstage1=6
+    feedstage2=6
+    num_stages=12
+    R=1
+    
+    F =np.zeros((num_stages,))
+    
+    if feedstage1==feedstage2:
+        F[feedstage1] = 1
+    else:    
+        F[feedstage1] = 0.5
+    F[feedstage2] += (1-F[feedstage1])
+    
+    z = [np.zeros((num_stages,)),np.zeros((num_stages,))]
+    if feedstage1==feedstage2:
+        z[1][feedstage1] = 0.5
+        z[0][feedstage1] = 0.5
+    else:
+        z[1][feedstage1] = 0.75
+        z[1][feedstage2] = 0.25
+        z[0][feedstage1] += (1-z[1][feedstage1])
+        z[0][feedstage2] += (1-z[1][feedstage2])
+ 
+    
+
+    model = Model(
+    components=['pentane','heptane'],
+    F=F, # kmol/h
+    P=2*1e6, # Pa
+    z_feed = z,
+    RR=R,
+    D=0.4,
+    )
+    
+    print(model.h_j_rule(5))
+    model.solve_self()
+    model.plot_molefractions()
+    model.check_equilibria()
