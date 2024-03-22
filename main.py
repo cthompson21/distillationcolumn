@@ -267,8 +267,7 @@ class Model:
         """
         
         return self.y[i][j]
-        # return self.CompoundData[i].K_func(self.T[j], self.P_feed) * self.x_ij_expr(i, j)
-
+        
     def Q_condenser_rule(self):
         """Condenser requirement can be determined from balances around total condenser"""
         return self.D * (1. + self.RR) * (self.h_j_rule(0) - self.H_j_rule(1))
@@ -299,9 +298,10 @@ class Model:
         
         p_tot[p_tot==0]=0.001
         self.p_tot = p_tot
+        # p_tot=self.P_feed
         # self.p_tot=np.ones(self.T.shape)*self.P_feed
         for c in self.components:
-            self.K[c][:] = (self.CompoundData[c].K_func(self.T,p_tot)+damp*self.K[c])/(1+damp)
+            self.K[c][:] = (self.CompoundData[c].K_func(self.T,self.P_feed)+damp*self.K[c])/(1+damp)
         
         damp_needed=False
         for c in self.components:
@@ -319,14 +319,14 @@ class Model:
             vectorize with matrix multiplication
 
         """
-
+        self.T_old=self.T.copy()
         for stage in self.stages:
             self.T[stage]=(self.bubble_T(stage)+damp*self.T[stage])/(damp+1)
         if np.any(self.T >10000):
             print("T's are getting high")
         if np.any(self.T <20):
             print("T's are getting low")
-        self.T_old=self.T.copy()
+        
 
     def bubble_T(self, stage):
         # l_total = sum(self.l[c][stage] for c in self.components)
@@ -334,9 +334,9 @@ class Model:
         # x_vals1 = [self.l[c][stage]/l_total for c in self.components]
         x_vals = [self.x[c][stage] for c in self.components]
         x_vals/=sum(x_vals)
-        p_tot = sum(self.K[c][stage]*self.x[c][stage] for c in self.components)
+        p_tot = np.sum((self.CompoundData[c].p_vap(self.T[stage])*self.x[c][stage] for c in self.components), axis=0)
        
-        return bubble_point(x_vals, K_vals, p_tot, self.T_old[stage])
+        return bubble_point(x_vals, K_vals, self.P_feed, self.T_old[stage])
 
     def calculate_T_feed(self):
         self.T_feed = self.bubble_T_feed()
@@ -344,6 +344,8 @@ class Model:
 
     def initialize_stage_temperatures(self):
         self.T[:] = self.T_feed
+        self.T+=np.random.random(self.T.shape)*0.1
+        
 
     # def bubble_T_feed(self, stage=None):
     #     """
@@ -363,8 +365,7 @@ class Model:
         .. include: calculate_feed_temperature.rst
 
         """
-        
-        
+
         t_out = np.zeros(self.T_feed.shape)
         for stage in np.where(self.F>0)[0]:
             t_out[stage]=bubble_point(
@@ -387,6 +388,8 @@ class Model:
         # self.L = smooth(self.L)
         # self.V[1:] = self.RR * self.D + self.D
         self.V[1:] = self.L[0:self.N] + self.D -np.cumsum(self.F_feed)[0:self.N]
+        self.L+=np.random.random(self.T.shape)*0.1
+        self.V+=np.random.random(self.T.shape)*0.1
         self.V[0]=0
         
         
@@ -398,8 +401,12 @@ class Model:
 
         :return: True if T is converged, else False
         """
-        eps = np.abs(self.T - self.T_old)
+        eps = self.T_convergence_criterion()
         return eps.max() < self.temperature_tol
+    
+    def T_convergence_criterion(self):
+        eps = np.abs(self.T - self.T_old)
+        return eps
 
     def solve_component_mass_bal(self, component, damp = 0.5):
         """Solve component mass balances
@@ -547,156 +554,70 @@ class Model:
         """
         return np.abs((new - old) / new).max() < self.flow_rate_tol
     
-    def solve_self(self):
-        
-        if self.check_inputs():
-            return -1
-        
-        reinit=True
-        if reinit:
-            self.T_feed = self.bubble_T_feed()   ### XXX need to update this to take in the array  Something not working heree!!!
-         
-            for i in self.stages:
-                if self.T_feed[i] ==0:
-                    self.T[i]=np.mean(self.T_feed[self.T_feed!=0])
-                else:
-                    self.T[i] = self.T_feed[i]
-
-            self.initialize_flow_rates()
-           
+    def solve_self(self,reinit=True):
+        if True:
+            if self.check_inputs():
+                return -1
             
-           
-        self.update_K_values(damp=0)
-        for i in self.components:
-            self.solve_component_mass_bal(i,damp=1)
-        self.update_T_values(damp=1)
-        self.solve_energy_balances(damp=1)
-       
-        
-        iter_count = 0
-       
-        while not self.T_is_converged():
+            
+            if reinit:
+                self.T_feed = self.bubble_T_feed()  ### XXX need to update this to take in the array  Something not working heree!!!
+                
+                for i in self.stages:
+                    if self.T_feed[i] ==0:
+                        self.T[i]=np.mean(self.T_feed[self.T_feed!=0])
+                    else:
+                        self.T[i] = self.T_feed[i]
+    
+                self.initialize_flow_rates()
+               
+                
+               
             self.update_K_values(damp=0)
             for i in self.components:
                 self.solve_component_mass_bal(i,damp=1)
             self.update_T_values(damp=1)
-            iter_count += 1
-            print(iter_count)
+            self.solve_energy_balances(damp=1)
+           
             
-        self.solve_energy_balances()
-        
-         
-       
-        
-        outer_loop = 0
-        inner_loop = 0
-        while not self.flow_rates_converged():
-            outer_loop += 1
+            iter_count = 0
+            
            
             while not self.T_is_converged():
-                inner_loop += 1
                 self.update_K_values(damp=0)
                 for i in self.components:
-                    self.solve_component_mass_bal(i,damp=0)
-                self.update_T_values(damp=0)
-         
+                    self.solve_component_mass_bal(i,damp=1)
+                self.update_T_values(damp=1)
+                iter_count += 1
             self.solve_energy_balances()
             
-            if outer_loop>512:
-                break
-        return 
-        # if self.check_inputs():
-        #     return -1
-        
-     
-        # self.T_feed = self.bubble_T_feed()   ### XXX need to update this to take in the array  Something not working heree!!!
-     
-        # for i in self.stages:
-        #     if self.T_feed[i] ==0:
-        #         self.T[i]=np.mean(self.T_feed[self.T_feed!=0])
-        #     else:
-        #         self.T[i] = self.T_feed[i]
+             
+           
+            
+            outer_loop = 0
+            inner_loop = 0
+            while not self.flow_rates_converged():
+                outer_loop += 1
+               
+               
+                while not self.T_is_converged():
+                    inner_loop += 1
+                    self.update_K_values(damp=0)
+                    for i in self.components:
+                        self.solve_component_mass_bal(i,damp=0)
+                    self.update_T_values(damp=0)
+             
+                self.solve_energy_balances()
                 
-            
-        # self.initialize_flow_rates()  ## initializes V and L
+                if outer_loop>512:
+                    break
+            return
         
         
-        # for repeat in range(15):
-        #     self.update_K_values()
-        #     # print('intiail mass balance', repeat)
-        #     for i in self.components:
-                
-        #         self.solve_component_mass_bal(i)
-        #     self.check_equilibria()
-            
-    
-        #     for stage in self.stages:
-        #         print(self.bubble_T(stage), self.T[stage])
-        #         self.T[stage] = (self.T[stage]+self.bubble_T(stage))/2 #### this damping seemed to help a lot with convergence
-            
-        #     if self.cmb_resid< 0.01:
-        #         break
         
-        # # print('intiating first energy balance')
-        # self.solve_energy_balances()
-        
-        
-        # iter = 0
-        
-        
-        # # print('Iint first lookp 561')
-        # while not self.T_is_converged():
-        #     self.update_K_values()
-            
-        #     print(self.K)
-        #     for i in self.components:
-        #         self.solve_component_mass_bal(i, damp=1)
-        #     print(self.cmb_resid)
-        #     # if self.mass_fraction_sum_check(): 
-        #     #     print('failing mass frac check 525')
-            
-        #     for stage in self.stages:
-        #         (self.T[stage]+self.bubble_T(stage))/2
-        #     iter += 1
-            
-            
-        
-        # self.solve_energy_balances()
         
         
        
-        # print('Iint main lookp 576')
-        # outer_loop = 0
-        # inner_loop = 0
-        # while not self.flow_rates_converged():
-        #     outer_loop += 1
-        #     for i in self.components:
-        #         self.solve_component_mass_bal(i)
-        #     self.mass_fraction_sum_check()
-        #     self.check_equilibria()
-                
-                
-            
-        #     for stage in self.stages:
-        #         (self.T[stage]+self.bubble_T(stage))/2
-           
-        #     while not self.T_is_converged():
-        #         inner_loop += 1
-        #         self.update_K_values()
-        #         for i in self.components:
-        #             self.solve_component_mass_bal(i)
-        #         self.mass_fraction_sum_check()
-        #         self.check_equilibria()
-            
-        #         for stage in self.stages:
-        #             (self.T[stage]+self.bubble_T(stage))/2
-         
-        #     self.solve_energy_balances()
-            
-        #     if outer_loop>256:
-        #         print("outerloop did not converge in 16")
-        #         break
-        # print( outer_loop)
             
         
             
@@ -743,6 +664,37 @@ class Model:
     
         ax2.legend()
         return fig2, (ax1,ax2,ax3,ax4) 
+    
+    def solve_for_min_purity(self, purity, product):
+        iter_count=0
+        delta=1
+        while np.abs(delta)>0.001:
+            old_delta=float(delta)
+            delta= purity -self.get_purity(product)
+            # print(self.RR, delta)
+            if np.abs(delta-old_delta)<0.00000001:
+                print('Purity plateau Reached')
+                break
+            if self.RR>100:
+                print("R is too high")
+                break
+            if delta>0.05:
+                self.RR*=1.1
+            elif delta<-0.002:
+                self.RR*=0.9
+            elif delta>0.001: 
+                self.RR*=1.02
+            
+            elif delta<-0.00001:
+                self.RR*=0.98
+            else:
+                self.RR*=1.02
+            self.solve_self(reinit=False)
+            iter_count+=1
+            if iter_count>200:
+                print("too many iterations")
+                return
+        return
 
 
 
